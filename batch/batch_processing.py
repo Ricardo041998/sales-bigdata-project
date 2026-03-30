@@ -1,67 +1,80 @@
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, sum, to_date
-import kagglehub
-import os
+from pyspark.sql.functions import col, sum, to_date, expr
 
-# 🔹 1. Descargar dataset
-path = kagglehub.dataset_download("zahraaalaatageldein/sales-for-furniture-store")
-print("Dataset descargado en:", path)
-
-# 🔹 2. Buscar archivo CSV automáticamente
-files = os.listdir(path)
-csv_file = [f for f in files if f.endswith(".csv")][0]
-csv_path = os.path.join(path, csv_file)
-
-print("Archivo CSV encontrado:", csv_path)
-
-# 🔹 3. Crear sesión Spark
+# 🔹 Crear sesión Spark
 spark = SparkSession.builder \
     .appName("BatchSalesAnalysis") \
     .getOrCreate()
 
-# 🔹 4. Cargar datos
-df = spark.read.csv(csv_path, header=True, inferSchema=True)
+# 🔹 Ruta del CSV (AJUSTA si cambia)
+csv_path = "/home/vboxuser/sales-bigdata-project/data/Super_Store_data.csv"
 
-print("=== Columnas del dataset ===")
+# 🔹 Leer CSV correctamente (evita errores de comillas)
+df = spark.read.csv(
+    csv_path,
+    header=True,
+    inferSchema=True,
+    multiLine=True,
+    quote='"',
+    escape='"'
+)
+
+print("=== COLUMNAS DEL DATASET ===")
 print(df.columns)
 
 df.show(5)
 
-# 🔹 5. Limpieza
+# 🔹 Limpieza
 df = df.dropna()
 
-# 🔹 6. AJUSTE AUTOMÁTICO DE COLUMNAS (IMPORTANTE)
-# Vamos a detectar nombres comunes
+# 🔹 Conversión de tipos segura
+df = df.withColumn("Sales", expr("try_cast(Sales as double)"))
+df = df.withColumn("Order Date", to_date(col("Order Date"), "M/d/yyyy"))
 
-# Posibles nombres según dataset
-date_col = [c for c in df.columns if "date" in c.lower()][0]
-sales_col = [c for c in df.columns if "sales" in c.lower() or "revenue" in c.lower()][0]
-product_col = [c for c in df.columns if "product" in c.lower()][0]
+# Eliminar registros inválidos
+df = df.dropna(subset=["Sales"])
 
-print(f"Usando columnas -> Fecha: {date_col}, Ventas: {sales_col}, Producto: {product_col}")
+# ===============================
+# 📊 ANÁLISIS (EDA)
+# ===============================
 
-# 🔹 7. Transformaciones
-df = df.withColumn("sales", col(sales_col).cast("double"))
-df = df.withColumn("date", to_date(col(date_col)))
+# 🔹 Ventas por categoría
+sales_category = df.groupBy("Category") \
+    .agg(sum("Sales").alias("Total_Sales"))
 
-# 🔹 8. EDA
+print("\n=== 📊 VENTAS POR CATEGORÍA ===")
+sales_category.show()
 
-# Ventas por producto
-sales_product = df.groupBy(product_col).agg(sum("sales").alias("total_sales"))
+# 🔹 Ventas por producto
+sales_product = df.groupBy("Product Name") \
+    .agg(sum("Sales").alias("Total_Sales"))
 
-print("=== Ventas por producto ===")
-sales_product.show()
+print("\n=== 📦 TOP 10 PRODUCTOS ===")
+sales_product.orderBy(col("Total_Sales").desc()).show(10)
 
-# Ventas por fecha
-sales_date = df.groupBy("date").agg(sum("sales").alias("total_sales"))
+# 🔹 Ventas por fecha
+sales_date = df.groupBy("Order Date") \
+    .agg(sum("Sales").alias("Total_Sales"))
 
-print("=== Ventas por fecha ===")
+print("\n=== 📅 VENTAS POR FECHA ===")
 sales_date.show()
 
-# Top productos
-print("=== Top productos ===")
-sales_product.orderBy(col("total_sales").desc()).show(5)
+# 🔹 Total general
+print("\n=== 💰 VENTAS TOTALES ===")
+df.agg(sum("Sales")).show()
 
-# Total general
-print("=== Total general ===")
-df.agg(sum("sales")).show()
+# ===============================
+# 🏆 PRODUCTO MÁS VENDIDO
+# ===============================
+
+top_product = sales_product.orderBy(col("Total_Sales").desc()).limit(1)
+
+print("\n=== 🏆 PRODUCTO MÁS VENDIDO ===")
+top_product.show()
+
+# Mostrar bonito
+top = top_product.collect()[0]
+
+print("\n🏆 RESULTADO FINAL:")
+print(f"Producto más vendido: {top['Product Name']}")
+print(f"Ventas totales: {top['Total_Sales']}")
